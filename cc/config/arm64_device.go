@@ -24,7 +24,13 @@ import (
 var (
 	arm64Cflags = []string{
 		// Help catch common 32/64-bit errors.
+		// Common to all LP64 architectures.
 		"-Werror=implicit-function-declaration",
+
+		// For stack allocations larger than a page, touch each page immediately
+		// to ensure we hit the guard page on stack overflow.
+		// Common to all LP64 architectures.
+		"-fstack-clash-protection",
 	}
 
 	arm64ArchVariantCflags = map[string][]string{
@@ -49,8 +55,15 @@ var (
 	}
 
 	arm64Ldflags = []string{
+		// Separate-code is required for XOM
 		"-Wl,-z,separate-code",
 		"-Wl,-z,separate-loadable-segments",
+	}
+
+	arm64ArchFeatureLdflags = map[string][]string{
+		"branchprot": {
+			"-Wl,-z,bti-report=error",
+		},
 	}
 
 	arm64Cppflags = []string{}
@@ -148,8 +161,8 @@ type toolchainArm64 struct {
 	toolchainBionic
 	toolchain64Bit
 
-	ldflags         string
-	toolchainCflags string
+	toolchainLdflags string
+	toolchainCflags  string
 }
 
 func (t *toolchainArm64) Name() string {
@@ -172,12 +185,20 @@ func (t *toolchainArm64) Cppflags() string {
 	return "${config.Arm64Cppflags}"
 }
 
-func (t *toolchainArm64) Ldflags() string {
-	return t.ldflags
+func (t *toolchainArm64) Ldflags(ctx ToolchainFlagsContext) FlagsWithDeps {
+	return FlagsWithDeps{
+		Flags: "${config.Arm64Ldflags}",
+	}
 }
 
 func (t *toolchainArm64) ToolchainCflags() string {
 	return t.toolchainCflags
+}
+
+func (t *toolchainArm64) ToolchainLdflags() FlagsWithDeps {
+	return FlagsWithDeps{
+		Flags: t.toolchainLdflags,
+	}
 }
 
 func (toolchainArm64) LibclangRuntimeLibraryArch() string {
@@ -185,6 +206,14 @@ func (toolchainArm64) LibclangRuntimeLibraryArch() string {
 }
 
 func arm64ToolchainFactory(arch android.Arch) Toolchain {
+	toolchainCflags, toolchainLdflags := arm64ToolchainFlags(arch)
+	return &toolchainArm64{
+		toolchainCflags:  toolchainCflags,
+		toolchainLdflags: toolchainLdflags,
+	}
+}
+
+func arm64ToolchainFlags(arch android.Arch) (string, string) {
 	// Error now rather than having a confusing Ninja error
 	if _, ok := arm64ArchVariantCflags[arch.ArchVariant]; !ok {
 		panic(fmt.Sprintf("Unknown ARM64 architecture version: %q", arch.ArchVariant))
@@ -197,14 +226,13 @@ func arm64ToolchainFactory(arch android.Arch) Toolchain {
 		toolchainCflags = append(toolchainCflags, arm64ArchFeatureCflags[feature]...)
 	}
 
-	extraLdflags := variantOrDefault(arm64CpuVariantLdflags, arch.CpuVariant)
-	return &toolchainArm64{
-		ldflags: strings.Join([]string{
-			"${config.Arm64Ldflags}",
-			extraLdflags,
-		}, " "),
-		toolchainCflags: strings.Join(toolchainCflags, " "),
+	extraLdflags := []string{"${config.Arm64Ldflags}"}
+	extraLdflags = append(extraLdflags,
+		variantOrDefault(arm64CpuVariantLdflags, arch.CpuVariant))
+	for _, feature := range arch.ArchFeatures {
+		extraLdflags = append(extraLdflags, arm64ArchFeatureLdflags[feature]...)
 	}
+	return strings.Join(toolchainCflags, " "), strings.Join(extraLdflags, " ")
 }
 
 func init() {

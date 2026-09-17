@@ -38,6 +38,8 @@ import (
 	"android/soong/android"
 )
 
+//go:generate go run ../../blueprint/gobtools/codegen
+
 var pctx = android.NewPackageContext("android/soong/etc")
 
 // TODO(jungw): Now that it handles more than the ones in etc/, consider renaming this file.
@@ -98,6 +100,7 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 
 }
 
+// @auto-generate: gob
 type PrebuiltEtcInfo struct {
 	// Returns the base install directory, such as "etc", "usr/share".
 	BaseDir string
@@ -108,6 +111,7 @@ type PrebuiltEtcInfo struct {
 var PrebuiltEtcInfoProvider = blueprint.NewProvider[PrebuiltEtcInfo]()
 
 // If this provider is set, it means this module was converted from PRODUCT_COPY_FILES
+// @auto-generate: gob
 type ProductCopyFilesModuleInfo struct {
 	// The entries as they would've appeared in PRODUCT_COPY_FILES, that is, src:dst
 	ProductCopyFileEntries []string
@@ -436,7 +440,9 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	filename := proptools.String(p.properties.Filename)
 	filenameFromSrc := proptools.Bool(p.properties.Filename_from_src)
 	if srcProperty.IsPresent() {
-		p.sourceFilePaths = android.PathsForModuleSrc(ctx, []string{srcProperty.Get()})
+		src := srcProperty.Get()
+		p.sourceFilePaths = android.PathsForModuleSrc(ctx, []string{src})
+
 		// If the source was not found, set a fake source path to
 		// support AllowMissingDependencies executions.
 		if len(p.sourceFilePaths) == 0 {
@@ -472,6 +478,10 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 		installs = append(installs, ip)
 		p.installDirPaths = append(p.installDirPaths, baseInstallDirPath)
+
+		// Build compliance metadata
+		ctx.ComplianceMetadataInfo().SetPrebuiltSrc(ctx, src)
+
 	} else if len(srcsProperty) > 0 {
 		p.usedSrcsProperty = true
 		if filename != "" {
@@ -491,6 +501,7 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		if len(dstsProperty) > 0 && len(p.sourceFilePaths) != len(dstsProperty) {
 			ctx.PropertyErrorf("dsts", "Must have one entry in dsts per source file")
 		}
+
 		for i, src := range p.sourceFilePaths {
 			var filename string
 			var installDirPath android.InstallPath
@@ -515,6 +526,14 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			installs = append(installs, ip)
 			p.installDirPaths = append(p.installDirPaths, installDirPath)
 		}
+
+		// Build compliance metadata
+		// Iterate through srcs and set CIPD_SRC accordingly.
+		// Note: only the metadata for the last cipd source will be counted.
+		for _, s := range srcsProperty {
+			ctx.ComplianceMetadataInfo().SetPrebuiltSrc(ctx, s)
+		}
+
 	} else if ctx.Config().AllowMissingDependencies() {
 		// If no srcs was set and AllowMissingDependencies is enabled then
 		// mark the module as missing dependencies and set a fake source path
@@ -534,7 +553,11 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		installs = append(installs, ip)
 		p.installDirPaths = append(p.installDirPaths, baseInstallDirPath)
 	} else {
-		ctx.PropertyErrorf("src", "missing prebuilt source file")
+		if ctx.Config().AllowMissingDependencies() {
+			ctx.AddMissingDependencies([]string{"missing_prebuilt_source_file"})
+		} else {
+			ctx.PropertyErrorf("src", "missing prebuilt source file")
+		}
 		return
 	}
 
@@ -595,7 +618,7 @@ func (ip *installProperties) addInstallRules(ctx android.ModuleContext, validati
 	// This ensures that outputFilePath has the correct name for others to
 	// use, as the source file may have a different name.
 	ctx.Build(pctx, android.BuildParams{
-		Rule:        android.Cp,
+		Rule:        android.CpRule,
 		Output:      ip.outputFilePath,
 		Input:       ip.sourceFilePath,
 		Validations: validations,
